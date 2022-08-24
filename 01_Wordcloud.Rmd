@@ -1,20 +1,181 @@
 ---
-title: "R Notebook"
-output:
-  html_document:
-    df_print: paged
+title: "1_Indeed_Jobs_WordClouds"
+author: "Naga Vemprala"
+date: '2022-08-24'
+output: html_document
 ---
 
-This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
-
-Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
-
-```{r}
-plot(cars)
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
 ```
 
-Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+## Markdown Details
 
-When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+<b> Author: </b> Naga Vemprala
+\
+<b> Purpose: </b> Create word clouds based on the keywords found in the job 
+escriptions for positions related to OTM and Text Analytics.\
+<b> Date Created: </b> 07/5/2022\
 
-The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+<b> High-level steps. </b>
+\
+ 1. Read the file, select the Job Description column only and discard rest \
+ 2. Pre-process the text \
+ 3. Capture the word counts. Do not take the stopwords and use lemmas.\
+ 4. Capture the words tf-idf \
+ 5. Plot the words with highest tf-idf for each word considering all the jobs\
+
+## Load all the necessary packages
+```{r, warning=FALSE, message=FALSE}
+library(readxl)
+library(dplyr)
+library(stringr)
+library(textcat)
+library(tidytext)
+library(textstem)
+library(wordcloud)
+library(wordcloud2)
+library(tidyr)
+library(ggplot2)
+```
+
+#### Load the input file
+
+```{r, warning=FALSE, message=FALSE}
+fileName <- paste0(getwd(), "/Input/indeed_job_details.xlsx")
+indeed_jobs <- read_xlsx(fileName)
+```
+
+#### Use only the job description column throughout this code
+
+```{r, warning=FALSE, message=FALSE}
+indeed_jobs <- indeed_jobs %>% 
+    select(Description)
+```
+
+
+
+#### Text Pre-Processing 
+#### Replace carriage returns and new line characters with an empty string ""
+#### Replace numeric characters, special characters (punctuations) with ""
+#### Change all words to lowercase
+
+```{r, warning=FALSE, message=FALSE}
+indeed_jobs$Description <- str_replace_all(indeed_jobs$Description, "\\n", "")
+indeed_jobs$Description <- str_replace_all(indeed_jobs$Description, "\\r", "")
+indeed_jobs$Description <- str_replace_all(indeed_jobs$Description, "[:punct:]", " ")
+indeed_jobs$Description <- str_replace_all(indeed_jobs$Description, "[:digit:]", " ")
+indeed_jobs$Description <- str_to_lower(indeed_jobs$Description)
+indeed_jobs$Description <- lemmatize_strings(indeed_jobs$Description)
+
+# Remove the extra spaces
+indeed_jobs$Description <- str_squish(indeed_jobs$Description)
+
+```
+
+
+
+#### Remove the stopwords and capture the word counts 
+
+```{r, warning=FALSE, message=FALSE}
+indeed_jobs_words <- indeed_jobs %>%
+    # Tokenize the Description into words 
+    unnest_tokens(word, Description) %>%
+    # Remove the most common words (stopwords such as a, an, the, etc.)
+    anti_join(stop_words, by = "word") %>%
+    # capture the word counts 
+    count(word)
+```
+
+
+
+#### Capture the term-frequency-inverse-document-frequency 
+
+```{r, warning=FALSE, message=FALSE}
+indeed_jobs_tfidf <- indeed_jobs %>%
+    # Create a column with the job id 
+    mutate(job_id = row_number()) %>%
+    # Tokenize the Description into words 
+    unnest_tokens(word, Description) %>%
+    # Remove the most common words (stopwords such as a, an, the, etc.)
+    anti_join(stop_words, by = "word") %>%
+    count(word, job_id) %>%
+    bind_tf_idf(term = word, document = job_id, n = n) %>%
+    arrange(job_id, desc(tf_idf)) %>%
+    select(job_id, word, tf_idf)
+```
+
+
+
+#### Capture the word counts from the word counts created earlier
+
+```{r, warning=FALSE, message=FALSE}
+indeed_jobs_tfidf_counts <- indeed_jobs_tfidf %>% 
+    left_join(indeed_jobs_words, by = "word")
+```
+
+
+#### Prepare the final dataset with top 300 TF-IDF values 
+
+```{r, warning=FALSE, message=FALSE}
+# Sort the final dataset by descending tf_idf 
+indeed_jobs_tfidf_desc <- indeed_jobs_tfidf_counts %>%
+    arrange(desc(tf_idf)) 
+
+# Remove duplicates 
+indeed_jobs_tfidf_desc <- indeed_jobs_tfidf_desc[
+    !duplicated(indeed_jobs_tfidf_desc$word),
+    ]
+
+indeed_jobs_tfidf_desc <- indeed_jobs_tfidf_desc[1:300,]
+```
+
+#### Gererate the wordcloud in grayscale  
+
+```{r, warning=FALSE, message=FALSE}
+wordcloud(word = indeed_jobs_tfidf_desc$word, 
+          freq = indeed_jobs_tfidf_desc$n, 
+          min.freq = 1, 
+          scale = c(1.15,0.25), 
+          random.order = TRUE, 
+          use.r.layout = FALSE)
+```
+
+#### Gererate the modern wordcloud
+
+```{r, warning=FALSE, message=FALSE}
+wordcloud2(indeed_jobs_tfidf_desc[,c("word", "n")])
+```
+
+
+
+#### Prepare the final dataset with top 300 frequent words values 
+
+```{r, warning=FALSE, message=FALSE}
+# Wordcloud based on the word frequency in all the descriptions 
+indeed_jobs_words <- indeed_jobs_words %>% 
+    arrange(desc(n))
+
+freq_based_wordcloud <- indeed_jobs_words[1:300,]
+```
+
+#### Gererate the wordcloud in grayscale  
+
+```{r, warning=FALSE, message=FALSE}
+wordcloud(word = freq_based_wordcloud$word, 
+          freq = freq_based_wordcloud$n,
+          min.freq = 1, 
+          scale = c(1.15,0.25), 
+          random.order = FALSE,
+          fixed.asp = FALSE,
+          rot.per=0)
+```
+
+#### Gererate the modern wordcloud
+
+```{r, warning=FALSE, message=FALSE}
+Sys.sleep(30)
+wordcloud2(freq_based_wordcloud[,c("word", "n")])
+```
+
+
