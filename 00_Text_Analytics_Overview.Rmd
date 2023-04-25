@@ -1,0 +1,250 @@
+---
+title: "Word_Frequency_Analysis"
+author: "Naga Vemprala"
+date: "2023-04-25"
+always_allow_html: true
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, 
+                      #tidy.opts = list(width.cutoff = 60), tidy = TRUE,
+                      max.print = 10000)
+```
+
+## Text Analytics/Text Mining using R
+
+> This markdown file demonstrates applications of text data and the significance of analyzing text data for organizational decision-making. Text data is widely available in an unstructured format in the form of customer reviews, news articles, blog posts, social media data, and contracts. Along with operational data, text data is crucial for organizations' decision-making processes. While drawing insights using the text data, the markdown also introduces data manipulation, cleansing, and utilization of some key data formats within text mining applications. This course also covers the data representation of text in machine learning algorithms and how this method can be extended to more complex applications, including topic models, clustering, word2vec, and other deep learning-based techniques, primarily through the R programming language.
+
+
+```{r load_libraries, read_files, echo=FALSE}
+library(readxl)
+library(tidyverse)
+library(stringr)
+library(tm)
+library(textmineR) # For LDA using new approach 
+library(tidytext)
+library(ggplot2)
+library(textstem)
+library(SnowballC)
+library(wordcloud)
+library(wordcloud2)
+IMDB_Reviews <- readxl::read_excel(paste0(getwd(), "/Input/IMDB_Reviews.xlsx"), 
+                                   sheet = "IMDB Dataset")
+```
+
+## Steps Involved in the frequency based analysis
+
+1. Text Pre-Processing   
+    + Remove line breaks 
+    + Remove special characters 
+    + Remove double quotation marks
+    + Remove patterns such as a), i), $900 (dollar figures), 
+    + Convert the upper case strings to lower case 
+2. Display a couple of sample reviews 
+3. Convert all strings to individual word tokens & plot visualizations (Top words with frequency and wordclouds)
+4. Extracting latent topics 
+    + LSA 
+    + LDA 
+
+
+#### 1. Text Pre-Processing 
+```{r text_pre_processing}
+IMDB_Reviews <- IMDB_Reviews %>%
+    mutate(review = str_replace_all(review, "<br />", " ")) %>%
+    mutate(review = str_remove_all(review, "[!@#%^*-?'&,+]")) %>%
+    mutate(review = str_remove_all(review, '\"')) %>%
+    mutate(review = str_replace_all(review, '\\.', " ")) %>%
+    mutate(review = str_remove_all(review, "[:punct:]")) %>%
+    mutate(review = str_squish(review)) %>%
+    mutate(review = str_to_lower(review))
+```
+
+#### 2. Display a couple of sample reviews
+
+```{r display_random_2_reviews}
+print(IMDB_Reviews[34,1])
+print(IMDB_Reviews[54,1])
+```
+
+
+#### 3. Convert all strings to individual word tokens 
+
+```{r unnest_tokens}
+contractions <- data.frame(word = c("doesnt", "dont", "didnt", "im"))
+frequency_sentiment_words <- union_all(IMDB_Reviews %>%
+                                           unnest_tokens(word, review) %>%
+                                           anti_join(stop_words) %>%
+                                           anti_join(contractions) %>%
+                                           filter(sentiment == "positive") %>%
+                                           count(word, sentiment, sort = TRUE) %>%
+                                           ungroup() %>% 
+                                           mutate(word_num = row_number()) %>%
+                                           filter(word_num <= 25)
+                                       ,
+                                       IMDB_Reviews %>%
+                                           unnest_tokens(word, review) %>%
+                                           anti_join(stop_words) %>%
+                                           anti_join(contractions) %>%
+                                           filter(sentiment == "negative") %>%
+                                           count(word, sentiment, sort = TRUE) %>%
+                                           ungroup() %>%
+                                           mutate(word_num = row_number()) %>%
+                                           filter(word_num <= 25)) 
+ggplot(frequency_sentiment_words) +
+    geom_bar(aes(x = reorder(word, n), y = n,
+                 fill = sentiment), stat = "identity",
+             show.legend = FALSE) + 
+    facet_grid(~sentiment, scales="free") + 
+    coord_flip() + 
+    labs( y = "Frequency of Words", x = "Top Words")
+```
+
+```{r wordClouds - positive words, echo=FALSE}
+frequency_sentiment_words <- IMDB_Reviews %>%
+    unnest_tokens(word, review) %>%
+    mutate(word = lemmatize_words(word)) %>%
+    anti_join(stop_words) %>%
+    anti_join(contractions) %>%
+    filter(sentiment == "positive") %>%
+    count(word, sort = TRUE) %>%
+    mutate(word_rank = row_number()) %>%
+    filter(word_rank <= 300) 
+```
+
+#### Create a positive reviews wordcloud
+```{r a colorful wordcloud - positive reviews}
+#wordcloud2(frequency_sentiment_words)
+wordcloud(frequency_sentiment_words$word,
+          frequency_sentiment_words$n,
+          random.color=TRUE)
+```
+
+#### Create a negative reviews wordcloud
+```{r wordClouds - negative reviews, echo=FALSE}
+frequency_sentiment_words <- IMDB_Reviews %>%
+    unnest_tokens(word, review) %>%
+    mutate(word = lemmatize_words(word)) %>%
+    anti_join(stop_words) %>%
+    anti_join(contractions) %>%
+    filter(sentiment == "negative") %>%
+    count(word, sort = TRUE) %>%
+    mutate(word_rank = row_number()) %>%
+    filter(word_rank <= 300)
+#wordcloud2(frequency_sentiment_words)
+```
+
+```{r a colorful wordcloud - negative reviews}
+wordcloud(frequency_sentiment_words$word,
+          frequency_sentiment_words$n,
+          random.color=TRUE)
+```
+
+#### Topic models 
+
+```{r LDA_Topics - Positive reviews, echo = FALSE}
+positive_reviews <- IMDB_Reviews[sample(1:50000, 3000), ] %>% 
+    filter(sentiment == "positive")
+
+xdtm <- CreateDtm(
+  doc_vec = positive_reviews$review,
+  doc_names = names(positive_reviews$review),
+  ngram_window = c(1, 2), # Bi-grams instead of only words 
+  stopword_vec = c(stopwords::stopwords("en"), stopwords::stopwords(source = "smart")),
+  lower = TRUE,
+  remove_punctuation = TRUE,
+  remove_numbers = TRUE,
+  #stem_lemma_function = function(x) SnowballC::wordStem(x, "porter"),
+  stem_lemma_function = NULL,
+  verbose = FALSE,
+)
+```
+
+> Extract topics from the positive reviews first 
+
+```{r fit LDA model on positive reviews}
+lda_textmineR <- FitLdaModel(
+  xdtm,
+  k = 5,
+  iterations = 500,
+  burnin = 200, # Hyper - parameters 
+  alpha = 0.1,
+  beta = 0.05,
+  optimize_alpha = T,
+  calc_likelihood = T,
+  calc_coherence = TRUE,
+  calc_r2 = T,
+)
+```
+
+> Top 15 terms per topic in the positive reviews 
+
+```{r print top 5 terms from positive reviews}
+lda_textmineR$top_Terms <- GetTopTerms(lda_textmineR$phi, 15, return_matrix = TRUE)
+lda_textmineR$top_Terms
+```
+
+> Plot the clusters and see how they are related  
+
+```{r plot hierarchical clusters of positive review topics}
+lda_textmineR$linguistic <- CalcHellingerDist(lda_textmineR$phi)
+lda_textmineR$hclust <- hclust(as.dist(lda_textmineR$linguistic),"ward.D") # Clustering 
+lda_textmineR$hclust$labels <- paste(lda_textmineR$hclust$labels, lda_textmineR$labels[,1])
+plot(lda_textmineR$hclust, 
+     xlab = "Topic",
+     ylab = "Topic coherence")
+```
+
+
+```{r LDA_Topics - Negative reviews, echo = FALSE}
+negative_reviews <- IMDB_Reviews[sample(1:50000, 3000), ] %>% 
+    filter(sentiment == "negative")
+
+xdtm <- CreateDtm(
+  doc_vec = negative_reviews$review,
+  doc_names = names(negative_reviews$review),
+  ngram_window = c(1, 2), # Bi-grams instead of only words 
+  stopword_vec = c(stopwords::stopwords("en"), stopwords::stopwords(source = "smart")),
+  lower = TRUE,
+  remove_punctuation = TRUE,
+  remove_numbers = TRUE,
+  #stem_lemma_function = function(x) SnowballC::wordStem(x, "porter"),
+  stem_lemma_function = NULL,
+  verbose = FALSE,
+)
+```
+
+> Extract topics from the negative reviews
+
+```{r fit LDA model on negative reviews}
+lda_textmineR <- FitLdaModel(
+  xdtm,
+  k = 5,
+  iterations = 500,
+  burnin = 200, # Hyper - parameters 
+  alpha = 0.1,
+  beta = 0.05,
+  optimize_alpha = T,
+  calc_likelihood = T,
+  calc_coherence = TRUE,
+  calc_r2 = T,
+)
+```
+
+> Top 15 terms per topic in the negative reviews 
+
+```{r print top 5 terms from negative reviews}
+lda_textmineR$top_Terms <- GetTopTerms(lda_textmineR$phi, 15, return_matrix = TRUE)
+lda_textmineR$top_Terms
+```
+
+> Plot the clusters and see how they are related  
+
+```{r plot hierarchical clusters of negative review topics}
+lda_textmineR$linguistic <- CalcHellingerDist(lda_textmineR$phi)
+lda_textmineR$hclust <- hclust(as.dist(lda_textmineR$linguistic),"ward.D") # Clustering 
+lda_textmineR$hclust$labels <- paste(lda_textmineR$hclust$labels, lda_textmineR$labels[,1])
+plot(lda_textmineR$hclust, 
+     xlab = "Topic",
+     ylab = "Topic coherence")
+```
