@@ -1,0 +1,215 @@
+---
+title: "Text Data Visualizations"
+author: "Vemprala"
+date: '2023-05-23'
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      # Setting the warning messages to FALSE so that the markdown output looks clean
+                      warning = FALSE, 
+                      message = FALSE)
+```
+
+#### Text Mining Visualizations 
+
+Visualizations facilitate the identification of data patterns and eliminate the need to read interpretation summaries. Also, prior to data modeling, it is essential to visualize the data to avoid any modeling issues.
+
+1. Charts, graphs, and infographics simplify complex data sets. They reveal patterns, trends, and relationships in raw data. Users can rapidly understand and take conclusions from visualizations.
+
+2. Decision Making: Visualizing data helps decision makers absorb and process information. Visualizations show comparisons and outliers, helping stakeholders find areas for development. Visualizations help wit the data exploration and improving decision-making.
+
+3. Communicating Insights: Visualizations help communicate data-driven insights. They make information aesthetically appealing and easily understandable, facilitating communication. Visualizations make complex data and reports easier to understand and remember.
+
+4. Visualizations help analysts find clusters, correlations, and anomalies rapidly by showing data points and patterns. 
+
+In this markdown file, some of the commonly used data visualizations using text data are presented. They include:
+
+1. Frequency bar plots
+2. Word associations 
+3. Word networks 
+4. Wordclouds and Wordcloud comparisons 
+
+```{r echo = FALSE}
+library(readxl)
+library(tidyverse)
+library(tidytext)
+library(tm)
+library(igraph)
+library(qdap)
+library(widyr)
+library(ggraph)
+```
+
+
+
+```{r 1. read_amazon_reviews}
+sentences <- read_xlsx(paste0(getwd(), "/Input/BlutoothSpeaker_B09JB8KPNW.xlsx"))
+# Check the dataset and replace NA by spaces 
+```
+
+#### Text Pre-processing 
+
+- Text Pre-Processing
++ Remove line breaks
++ Remove special characters
++ Remove double quotation marks
++ Remove extra spaces 
++ Convert the upper case strings to lower case
++ removing stopwords 
+
+
+```{r 2. Text pre-processing except stopwords}
+sentences <- sentences %>%
+    mutate(review_text = str_replace_all(review_text, "<br />", " ")) %>%
+    mutate(review_text = str_remove_all(review_text, "[!@#%^*-?'&,+]")) %>%
+    mutate(review_text = str_remove_all(review_text, '\"')) %>%
+    mutate(review_text = str_replace_all(review_text, '\\.', " ")) %>%
+    mutate(review_text = str_remove_all(review_text, "[:punct:]")) %>%
+    mutate(review_text = str_squish(review_text)) %>%
+    mutate(review_text = str_to_lower(review_text))
+```
+
+
+```{r 3. remove stopwords}
+sentences_stringr_processed <- sentences %>% 
+  mutate(sno = row_number()) %>%
+  unnest_tokens(word, review_text) %>%
+  anti_join(stop_words) %>%
+  group_by(sno) %>%
+  mutate(review_text = str_c(word, collapse = " ")) %>%
+  select(sno, review_text) %>%
+  ungroup() %>% # Always add ungroup when group_by is used and done with grouping 
+  unique(.)
+```
+
+
+```{r 4. Compute the word frequencies} 
+word_frequencies <- sentences_stringr_processed %>%
+  select(review_text) %>%
+  unnest_tokens(word, review_text) %>%
+  #count(word) 
+  group_by(word) %>%
+  summarise(frequency = n()) %>%
+  ungroup() #  If you forget to ungroup() data, future data management will likely produce errors. One common reason for the error is due to the grouping variables added back to the original dataset even when it is not required in the later analysis. Always ungroup() when you’ve finished with your calculations. 
+  
+```
+
+
+```{r create a bar graph of top 20 words}
+word_frequencies %>% 
+  mutate(word_rank = dense_rank(desc(frequency))) %>%
+  arrange(desc(frequency)) %>%
+  filter(word_rank <= 20) %>%
+  ggplot(aes(x = word, y = frequency)) +
+  geom_bar(aes(x = reorder(word, frequency), y = frequency),
+           stat = "identity", 
+           fill = "blue") + 
+  geom_text(aes(label = frequency), vjust = 0, hjust = -0.25, 
+            size = 3, colour = "black") +
+  coord_flip() + 
+  #coord_polar() + 
+  labs(x = "word", y = "freq") 
+```
+
+#### Implement text mining (pre-processing and visuliazation) using "tm" package.
+
+```{r text pre-processing using "tm" package}
+# Create a pre-processing function to reuse the common steps
+corpus <- Corpus(VectorSource(sentences$review_text))
+customWords <- c("im", "done", "gone")
+text_pre_process <- function(corpus) {
+  corpus <- tm_map(corpus, tolower)
+  corpus <- tm_map(corpus, removeNumbers)
+  corpus <- tm_map(corpus, stripWhitespace)
+  corpus <- tm_map(corpus, removeWords, customWords)
+  corpus <- tm_map(corpus, removeWords, stopwords(kind = "en"))
+  return(corpus)
+}
+corpus <- text_pre_process(corpus)
+sentences_tm_processed <- corpus$content
+sentences_tm_processed <- as.data.frame(sentences_tm_processed)
+names(sentences_tm_processed) <- c("review_text")
+sentences_tm_processed$review_text <- str_squish(sentences_tm_processed$review_text)
+```
+
+
+#### In text mining word associations are similar to correlations in quantitative methods.
+
+```{r plot word associations}
+tdm <- TermDocumentMatrix(corpus)
+word_associations <- findAssocs(tdm, "clarity", 0.25)
+word_associations <- as.data.frame(word_associations)
+word_associations$terms <- row.names(word_associations)
+ggplot(word_associations) +
+  geom_point(aes(x = clarity, y = terms))
+```
+
+#### Word association graphs (Usual for social media data analysis)
+
+- Create adjacency matrix using the reviews that contain returns. 
+
+```{r extract_sentences_with_return}
+return_reviews <- sentences[str_detect(sentences_tm_processed$review_text, "return"),]
+return_reviews <- return_reviews[str_length(return_reviews$review_text) < 200, ]
+return_reviews <- return_reviews[c(1,2),]
+
+return_reviews <- return_reviews[complete.cases(return_reviews$review_text),]
+corpus <- Corpus(VectorSource(return_reviews$review_text))
+tdm <- TermDocumentMatrix(corpus)
+tdm_matrix <- as.matrix(tdm)
+adjacency_matrix <- tdm_matrix %*% t(tdm_matrix)
+adjacency_matrix <- graph.adjacency(adjacency_matrix, 
+                                    weighted = TRUE, 
+                                    mode = "undirected", 
+                                    diag = TRUE)
+adjacency_matrix <- simplify(adjacency_matrix)
+plot.igraph(adjacency_matrix)
+```
+
+
+
+```{r qdap adjacency matrix}
+
+return_reviews <- return_reviews[seq(1,5),]
+word_network_plot(return_reviews$review_text)
+
+```
+
+```{r using qdap word_associate}
+return_reviews <- sentences[str_detect(sentences_tm_processed$review_text, "return"),]
+return_reviews <- return_reviews[str_length(return_reviews$review_text) < 200, ]
+return_reviews <- return_reviews[seq(1,5),]
+word_associate(return_reviews$review_text, 
+               match.string = c("return"), 
+               stopwords = Top200Words, network.plot = TRUE)
+```
+
+```{r pairwise_Correlations}
+return_reviews <- sentences[str_detect(sentences_tm_processed$review_text, "return"),]
+return_reviews %>%
+  mutate(reviewId = row_number()) %>%
+  unnest_tokens(word, review_text) %>%
+  anti_join(stop_words, by = "word") %>%
+  pairwise_cor(word, reviewId, sort = T) %>%
+  filter( (correlation > 0.8) & (correlation < 0.9) ) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = correlation), show.legend = F) +
+  geom_node_point(color = "lightblue", size = 5) +
+  geom_node_text(aes(label = name), repel = T) 
+
+
+```
+
+```{r dendograms}
+return_reviews <- sentences_tm_processed[str_detect(sentences_tm_processed$review_text, "return"),]
+corpus <- Corpus(VectorSource(return_reviews))
+tdm <- TermDocumentMatrix(corpus)
+tdm_for_hclusters <- removeSparseTerms(tdm, sparse = 0.9)
+hclusters <- hclust(dist(tdm_for_hclusters, method = "euclidean"),
+                    method = "complete")
+plot(hclusters, main = "Cluster of overlapping words by frequencies")
+```
+
